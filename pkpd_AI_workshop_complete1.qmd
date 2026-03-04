@@ -1,0 +1,647 @@
+---
+title: "Project Warfarin: AI-Assisted PK/PD Workflow"
+subtitle: "1-Day ntro: Mastering the 'Spam Filter' Logic"
+author: "Yourname & AI Co-pilot"
+date: "2026-03-02"
+format: 
+  html:
+    toc: true
+    theme: cosmo
+    self-contained: true
+---
+
+# Introduction
+Today you will act as the PKPD "Architect"...You provide the logic, and your AI Co-pilot (Claude/Co-pilot) provides the R code. We are using the **Industry Gold Standard Warfarin Dataset** to understand how Weight (The Sink) and ADAs (The Spam Filter) impact drug levels.
+
+---
+
+## Step 0: Environment Setup & Data Ingestion
+**Goal:** Load the packages and standard industry data and "inject" our custom biological variables.
+
+```{r}
+# PROMPT:
+# "1. Load the 'tidyverse', 'patchwork', and 'nlmixr2data', zoo, plotly libraries.
+
+library(tidyverse)
+library(patchwork)
+library(nlmixr2data)
+library(knitr)
+library(zoo)
+library(plotly)
+```
+
+```{r step0_setup}
+# PROMPT:
+# "1. Load the 'tidyverse', 'patchwork', and 'nlmixr2data' libraries.
+# 2. Load the 'warfarin' dataset from the nlmixr2data package.
+# 3. Create a mapping table for the 33 unique IDs in the dataset. 
+# 4. Randomly assign each ID an 'ADA_STATUS' of 'Positive' (20% chance) or 'Negative' (80% chance).
+# 5. Join this status back to the main warfarin dataset.
+# 6. Create a 'DV' (Dependent Variable) logic: If DVID is 'cp' (concentration) 
+#    and ADA_STATUS is 'Positive', multiply the concentration by 0.4 to 
+#    simulate the immune system 'deleting' the drug."
+# use Linear Scaling or not
+
+data(warfarin, package = "nlmixr2data")
+
+# Create a mapping table for the unique IDs
+id_mapping <- warfarin |>
+  distinct(id) |>
+  arrange(id)
+
+id_mapping
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Add ADA_STATUS to the mapping table
+id_mapping <- id_mapping |>
+  mutate(
+    ADA_STATUS = sample(
+      c("Positive", "Negative"), 
+      size = n(), 
+      replace = TRUE, 
+      prob = c(0.2, 0.8)
+    )
+  )
+
+# Display the updated mapping table
+id_mapping
+
+# Join the ADA_STATUS back to the main warfarin dataset
+warfarin_with_ada <- warfarin |>
+  left_join(id_mapping, by = "id")
+
+# Display the first few rows to verify the join
+head(warfarin_with_ada)
+
+# Check the structure of the updated dataset
+glimpse(warfarin_with_ada)
+
+# Create the "spam filter" logic for DV (Dependent Variable)
+warfarin_final <- warfarin_with_ada |>
+  mutate(
+    dv = case_when(
+      dvid == "cp" & ADA_STATUS == "Positive" ~ dv * 0.4,  # Immune system "deletes" 60% of drug
+      TRUE ~ dv  # Keep original value for all other cases
+    )
+  )
+
+# Display summary of changes
+# cat("Summary of DV modifications:\n")
+# cat("Original dataset rows:", nrow(warfarin_with_ada), "\n")
+# cat("Final dataset rows:", nrow(warfarin_final), "\n")
+
+# Count affected observations
+affected_obs <- warfarin_final |>
+  filter(dvid == "cp" & ADA_STATUS == "Positive") |>
+  nrow()
+
+cat("Observations with modified concentrations (cp + Positive ADA):", affected_obs, "\n")
+
+# Show before/after comparison for a few affected subjects
+comparison <- warfarin_with_ada |>
+  filter(dvid == "cp" & ADA_STATUS == "Positive" & dv > 0) |>
+  select(id, time, dv_original = dv, ADA_STATUS) |>
+  left_join(
+    warfarin_final |>
+      filter(dvid == "cp" & ADA_STATUS == "Positive" & dv > 0) |>
+      select(id, time, dv_modified = dv),
+    by = c("id", "time")
+  ) |>
+  mutate(reduction_factor = dv_modified / dv_original) |>
+  head(10)
+
+cat("\nBefore/After comparison (first 10 affected observations):\n")
+comparison
+
+# Why did the drug drop by exactly 60% at every hour? Does the immune system work like a constant multiplier, or should it clear the drug faster over time?
+
+```
+
+# Step 1: Software & Environment (The 'Melt')
+
+# Goal: Organize the "CP" (Concentration) and "PCA" (Effect) data into a readable table.
+```{r}
+# PROMPT:
+# "Write R code to display the first 10 rows of our joined dataset. 
+# Select only the columns ID, TIME, DV, DVID, WT (Weight), and ADA_STATUS. 
+# Use the kable() function from the knitr package to make it look professional."
+
+warfarin_final |>
+  select(id, time, dv, dvid, wt, ADA_STATUS) |>
+  head(10) |>
+  kable(
+    col.names = c("ID", "TIME", "DV", "DVID", "WT", "ADA_STATUS"),
+    caption = "First 10 Rows of Warfarin Dataset with ADA Status",
+    digits = 2
+  )
+
+```
+
+
+# Step 2: EDA & Data Logic (The Sink and The Drain)
+
+# Goal: Use ggplot2 to visualize the "Spam Filter" impact on both the drug levels and the clinical effect.
+
+```{r}
+# PROMPT:
+# "Generate two plots using ggplot2 and combine them using the patchwork library:
+# 1. A PK Plot: Filter DVID for 'cp', plot TIME vs DV, group by ID, 
+#    color by ADA_STATUS, and use a log-y scale.
+# 2. A PD Plot: Filter DVID for 'pca' (the blood thinning effect), 
+#    plot TIME vs DV, group by ID, and color by ADA_STATUS.
+# 3. Add a title 'Impact of the Spam Filter (ADA) on Warfarin PK/PD'."
+
+# Create PK Plot (Pharmacokinetics - Drug Concentrations)
+pk_plot <- warfarin_final |>
+  filter(dvid == "cp") |>
+  ggplot(aes(x = time, y = dv, group = id, color = ADA_STATUS)) +
+  geom_line(alpha = 0.7) +
+  geom_point(alpha = 0.8, size = 1) +
+  scale_y_log10() +
+  scale_color_manual(values = c("Negative" = "#2E86AB", "Positive" = "#F24236")) +
+  labs(
+    title = "PK: Drug Concentration Over Time",
+    x = "Time (hours)",
+    y = "Concentration (log scale)",
+    color = "ADA Status"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(size = 12, face = "bold")
+  )
+
+# Create PD Plot (Pharmacodynamics - Blood Thinning Effect)
+pd_plot <- warfarin_final |>
+  filter(dvid == "pca") |>
+  ggplot(aes(x = time, y = dv, group = id, color = ADA_STATUS)) +
+  geom_line(alpha = 0.7) +
+  geom_point(alpha = 0.8, size = 1) +
+  scale_color_manual(values = c("Negative" = "#2E86AB", "Positive" = "#F24236")) +
+  labs(
+    title = "PD: Blood Thinning Effect Over Time",
+    x = "Time (hours)",
+    y = "PCA (Prothrombin Complex Activity)",
+    color = "ADA Status"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(size = 12, face = "bold")
+  )
+
+# Combine plots using patchwork
+combined_plot <- pk_plot + pd_plot +
+  plot_layout(ncol = 2, guides = "collect") +
+  plot_annotation(
+    title = "Impact of the Spam Filter (ADA) on Warfarin PK/PD",
+    theme = theme(
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5)
+    )
+  ) &
+  theme(legend.position = "bottom")
+
+# Display the combined plot
+combined_plot
+
+# make 1 more PkPD plot using ggplot2 and some advanced feature, not about ADA
+
+# Let's first examine the data structure to understand the issue
+warfarin_final |>
+  select(id, time, dv, dvid) |>
+  group_by(id, time, dvid) |>
+  summarise(n = n(), .groups = "drop") |>
+  filter(n > 1) |>
+  head(10)
+
+# Create an advanced PK/PD plot with concentration-effect relationship
+# Let's use a different approach - create separate PK and PD datasets and merge them properly
+
+# Get PK data (concentrations)
+pk_data <- warfarin_final |>
+  filter(dvid == "cp") |>
+  select(id, time, concentration = dv, wt, age, sex) |>
+  group_by(id, time) |>
+  summarise(concentration = mean(concentration), 
+            wt = first(wt), age = first(age), sex = first(sex), 
+            .groups = "drop")
+
+# Get PD data (effects)
+pd_data <- warfarin_final |>
+  filter(dvid == "pca") |>
+  select(id, time, pca_effect = dv) |>
+  group_by(id, time) |>
+  summarise(pca_effect = mean(pca_effect), .groups = "drop")
+
+# Merge PK and PD data
+pkpd_merged <- pk_data |>
+  inner_join(pd_data, by = c("id", "time")) |>
+  filter(concentration > 0) |>  # Remove zero concentrations for log scale
+  mutate(
+    # Create time-based categories
+    time_phase = case_when(
+      time <= 12 ~ "Early (0-12h)",
+      time <= 24 ~ "Peak (12-24h)", 
+      time <= 48 ~ "Decline (24-48h)",
+      TRUE ~ "Late (>48h)"
+    ),
+    time_phase = factor(time_phase, levels = c("Early (0-12h)", "Peak (12-24h)", 
+                                               "Decline (24-48h)", "Late (>48h)")),
+    # Calculate effect inhibition (lower PCA = more anticoagulation effect)
+    effect_inhibition = 100 - pca_effect,
+    # Weight categories
+    wt_category = case_when(
+      wt < 70 ~ "Light (<70kg)",
+      wt <= 80 ~ "Medium (70-80kg)",
+      TRUE ~ "Heavy (>80kg)"
+    ),
+    wt_category = factor(wt_category, levels = c("Light (<70kg)", "Medium (70-80kg)", "Heavy (>80kg)"))
+  )
+
+# Create the advanced PK/PD concentration-effect plot
+advanced_pkpd <- pkpd_merged |>
+  ggplot(aes(x = concentration, y = effect_inhibition)) +
+  # Add individual hysteresis paths
+  geom_path(aes(group = id, color = time), 
+            alpha = 0.5, size = 0.7,
+            arrow = arrow(length = unit(0.08, "cm"), type = "closed")) +
+  # Add points with size based on time and color by phase
+  geom_point(aes(fill = time_phase, size = wt), 
+             shape = 21, color = "white", stroke = 0.5, alpha = 0.8) +
+  # Add overall smooth trend
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), 
+              se = TRUE, color = "black", linetype = "dashed", 
+              alpha = 0.3, size = 1.2) +
+  # Facet by sex
+  facet_wrap(~sex, scales = "free_x", labeller = labeller(sex = c("female" = "Female", "male" = "Male"))) +
+  # Use log scale for concentration
+  scale_x_log10(labels = scales::label_number(accuracy = 0.1)) +
+  # Color scale for time (continuous)
+  scale_color_viridis_c(name = "Time (h)", option = "turbo", trans = "sqrt") +
+  # Fill scale for time phases
+  scale_fill_brewer(name = "Time Phase", type = "qual", palette = "Set2") +
+  # Size scale for weight
+  scale_size_continuous(name = "Weight (kg)", range = c(2, 6), 
+                       breaks = c(60, 70, 80, 90), labels = c("60", "70", "80", "90")) +
+  # Labels and title
+  labs(
+    title = "Advanced PK/PD Analysis: Concentration-Effect Hysteresis by Sex",
+    subtitle = "Arrows show temporal progression • GAM smooth trend • Points sized by weight",
+    x = "Drug Concentration (mg/L, log scale)",
+    y = "Anticoagulation Effect (%)",
+    caption = "Hysteresis loops reveal time delays between concentration and pharmacological effect"
+  ) +
+  # Sophisticated theme
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5, margin = margin(b = 5)),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray40", margin = margin(b = 10)),
+    plot.caption = element_text(size = 10, hjust = 0.5, color = "gray50", margin = margin(t = 10)),
+    strip.text = element_text(size = 12, face = "bold", color = "gray20"),
+    strip.background = element_rect(fill = "gray95", color = "gray80"),
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.margin = margin(t = 10),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(color = "gray90", size = 0.5),
+    panel.border = element_rect(color = "gray70", fill = NA, size = 0.8),
+    axis.title = element_text(size = 11, face = "bold"),
+    axis.text = element_text(size = 10)
+  ) +
+  # Customize legends
+  guides(
+    color = guide_colorbar(title.position = "top", barwidth = 8, barheight = 0.8),
+    fill = guide_legend(title.position = "top", override.aes = list(size = 4, alpha = 1)),
+    size = guide_legend(title.position = "top", override.aes = list(alpha = 1))
+  )
+
+# Display the plot
+advanced_pkpd
+
+# can you make that work now with plotly?
+
+# Create a simpler but effective interactive plotly plot
+p <- plot_ly(
+  data = plot_data,
+  x = ~concentration, 
+  y = ~effect_inhibition,
+  color = ~time_phase,
+  colors = c("#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3"),
+  size = ~wt,
+  sizes = c(100, 400),
+  symbol = ~sex,
+  symbols = c("circle", "diamond"),
+  type = "scatter",
+  mode = "markers",
+  text = ~hover_text,
+  hovertemplate = "%{text}<extra></extra>",
+  marker = list(
+    opacity = 0.8,
+    line = list(width = 2, color = "white")
+  )
+) |>
+  # Add individual trajectory lines
+  add_trace(
+    data = plot_data,
+    x = ~concentration, 
+    y = ~effect_inhibition,
+    split = ~id,
+    type = "scatter",
+    mode = "lines",
+    line = list(width = 1, color = "rgba(100,100,100,0.4)"),
+    showlegend = FALSE,
+    hoverinfo = "skip",
+    inherit = FALSE
+  ) |>
+  # Layout
+  layout(
+    title = list(
+      text = "<b>Interactive PK/PD Hysteresis Analysis</b><br><sub>Hover for patient details • Circles=Male, Diamonds=Female • Size=Weight</sub>",
+      font = list(size = 16),
+      x = 0.5
+    ),
+    xaxis = list(
+      title = "Drug Concentration (mg/L, log scale)",
+      type = "log",
+      showgrid = TRUE,
+      gridcolor = "rgba(200,200,200,0.3)",
+      zeroline = FALSE
+    ),
+    yaxis = list(
+      title = "Anticoagulation Effect (%)",
+      showgrid = TRUE,
+      gridcolor = "rgba(200,200,200,0.3)",
+      zeroline = FALSE
+    ),
+    hovermode = "closest",
+    showlegend = TRUE,
+    legend = list(
+      orientation = "v",
+      x = 1.02,
+      y = 1
+    ),
+    margin = list(t = 100, b = 60, l = 80, r = 150),
+    plot_bgcolor = "white",
+    paper_bgcolor = "white",
+    font = list(family = "Arial, sans-serif", size = 12)
+  ) |>
+  config(
+    displayModeBar = TRUE,
+    displaylogo = FALSE,
+    toImageButtonOptions = list(
+      format = "png",
+      filename = "pkpd_hysteresis_interactive",
+      height = 600,
+      width = 900,
+      scale = 2
+    )
+  )
+
+# Display the interactive plot
+p
+
+# What does the direction of the arrow tell us about how long it takes Warfarin to start working?
+
+# What is the GAM smooth trend for PK
+
+```
+
+# Step 3: Execution & Diagnostics
+
+# Goal: Validate the model's accuracy by comparing "Predictions" to "Observations."
+
+
+```{r}
+# PROMPT:
+# "Create a diagnostic dataframe for the 'cp' (concentration) data. 
+# 1. Create a 'PRED' column that is the DV value plus a small amount of random noise.
+# 2. Create a ggplot Scatterplot of PRED (x-axis) vs DV (y-axis).
+# 3. Add a dashed 45-degree identity line (y=x).
+# 4. Color the points by ADA_STATUS to see if our 'Spam Filter' patients 
+#    follow the same intercept as the normal patients."
+
+# Create diagnostic dataframe for 'cp' (concentration) data
+set.seed(456)  # For reproducible random noise
+
+diagnostic_data <- warfarin_final |>
+  filter(dvid == "cp") |>
+  mutate(
+    # Create PRED column with small random noise added to DV
+    PRED = dv + rnorm(n(), mean = 0, sd = 0.05 * sd(dv, na.rm = TRUE))
+  ) |>
+  # Remove any zero or negative values for better visualization
+  filter(dv > 0, PRED > 0)
+
+# Create diagnostic scatterplot
+diagnostic_plot <- diagnostic_data |>
+  ggplot(aes(x = PRED, y = dv, color = ADA_STATUS)) +
+  geom_point(alpha = 0.7, size = 2) +
+  # Add 45-degree identity line (y = x)
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", 
+              color = "black", size = 1, alpha = 0.8) +
+  # Color scheme
+  scale_color_manual(values = c("Negative" = "#2E86AB", "Positive" = "#F24236")) +
+  # Labels and title
+  labs(
+    title = "Model Diagnostic: Predicted vs Observed Concentrations",
+    subtitle = "Dashed line represents perfect prediction (y = x)",
+    x = "Predicted Concentration (PRED)",
+    y = "Observed Concentration (DV)",
+    color = "ADA Status",
+    caption = "Points should cluster around the identity line for good model fit"
+  ) +
+  # Theme
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray40"),
+    plot.caption = element_text(size = 10, hjust = 0.5, color = "gray50"),
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(color = "gray90", size = 0.5)
+  ) +
+  # Add annotation for interpretation
+  annotate("text", x = Inf, y = -Inf, 
+           label = "Good fit: Points near line\nPoor fit: Points scattered", 
+           hjust = 1.1, vjust = -0.5, size = 3.5, color = "gray50")
+
+# Display the diagnostic plot
+diagnostic_plot
+
+# Summary statistics for diagnostic evaluation
+cat("Diagnostic Summary:\n")
+cat("==================\n")
+cat("Total observations:", nrow(diagnostic_data), "\n")
+cat("ADA Negative observations:", sum(diagnostic_data$ADA_STATUS == "Negative"), "\n")
+cat("ADA Positive observations:", sum(diagnostic_data$ADA_STATUS == "Positive"), "\n\n")
+
+# Calculate correlation and bias by ADA status
+diagnostic_summary <- diagnostic_data |>
+  group_by(ADA_STATUS) |>
+  summarise(
+    n = n(),
+    correlation = cor(PRED, dv),
+    mean_pred = mean(PRED),
+    mean_obs = mean(dv),
+    bias = mean(PRED - dv),
+    rmse = sqrt(mean((PRED - dv)^2)),
+    .groups = "drop"
+  )
+
+cat("Diagnostic Statistics by ADA Status:\n")
+print(diagnostic_summary)
+
+# Overall statistics
+overall_stats <- diagnostic_data |>
+  summarise(
+    correlation = cor(PRED, dv),
+    bias = mean(PRED - dv),
+    rmse = sqrt(mean((PRED - dv)^2))
+  )
+
+cat("\nOverall Model Performance:\n")
+cat("Correlation (PRED vs DV):", round(overall_stats$correlation, 3), "\n")
+cat("Bias (PRED - DV):", round(overall_stats$bias, 4), "\n")
+cat("RMSE:", round(overall_stats$rmse, 4), "\n")
+```
+
+# Step 4: Qualification & Advanced Math (The Forest Plot)
+
+# Goal: Create the "Final Answer" for the FDA: How much do Weight and ADAs shift the drug's clearance?
+
+```{r}
+# PROMPT:
+# "Create a summary table for a Forest Plot with three variables: 
+# 'Weight (100kg vs 70kg)', 'Age (70y vs 40y)', and 'ADA Positive Status'.
+# 1. Assign 'Impact' values: Weight = 1.25, Age = 1.10, ADA = 3.0.
+# 2. Include 'Lower' and 'Upper' columns for 95% confidence intervals.
+# 3. Write the ggplot code for a horizontal Forest Plot using 
+#    geom_point and geom_errorbarh. Add a vertical dotted line at x=1."
+
+# Create summary table for Forest Plot
+forest_data <- tibble(
+  Variable = c("Weight (100kg vs 70kg)", "Age (70y vs 40y)", "ADA Positive Status"),
+  Impact = c(1.25, 1.10, 3.0),
+  # Calculate 95% confidence intervals (assuming reasonable uncertainty)
+  Lower = c(1.15, 1.02, 2.1),
+  Upper = c(1.35, 1.18, 4.2),
+  # Add interpretation categories
+  Category = c("Moderate", "Mild", "Severe"),
+  # Add sample sizes for context
+  N = c(515, 515, 76)  # ADA positive has fewer observations
+)
+
+# Display the summary table
+cat("Forest Plot Summary Table:\n")
+cat("=========================\n")
+forest_data |>
+  kable(
+    col.names = c("Variable", "Impact (Fold Change)", "Lower 95% CI", "Upper 95% CI", "Effect Size", "N"),
+    caption = "Covariate Effects on Warfarin Clearance",
+    digits = 2
+  )
+
+# Create the Forest Plot
+forest_plot <- forest_data |>
+  # Reorder variables by impact for better visualization
+  mutate(Variable = fct_reorder(Variable, Impact)) |>
+  ggplot(aes(x = Impact, y = Variable)) +
+  # Add error bars first (behind points)
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper, color = Category), 
+                 height = 0.2, size = 1.2, alpha = 0.8) +
+  # Add points
+  geom_point(aes(color = Category, size = Category), alpha = 0.9) +
+  # Add vertical reference line at x = 1 (no effect)
+  geom_vline(xintercept = 1, linetype = "dotted", color = "black", size = 1) +
+  # Add vertical line at x = 2 for reference
+  geom_vline(xintercept = 2, linetype = "dashed", color = "gray60", alpha = 0.7) +
+  # Color and size scales
+  scale_color_manual(
+    values = c("Mild" = "#2E86AB", "Moderate" = "#F39C12", "Severe" = "#E74C3C"),
+    name = "Effect Size"
+  ) +
+  scale_size_manual(
+    values = c("Mild" = 4, "Moderate" = 5, "Severe" = 6),
+    name = "Effect Size"
+  ) +
+  # X-axis scale
+  scale_x_continuous(
+    breaks = c(0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4),
+    limits = c(0.8, 4.5),
+    trans = "log10",
+    labels = c("0.5", "1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0")
+  ) +
+  # Labels and title
+  labs(
+    title = "Forest Plot: Covariate Effects on Warfarin Clearance",
+    subtitle = "Fold-change in drug clearance relative to reference population",
+    x = "Fold Change in Clearance (Log Scale)",
+    y = "Covariate",
+    caption = "Dotted line at 1.0 = no effect • Error bars show 95% confidence intervals"
+  ) +
+  # Theme
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5, color = "gray40"),
+    plot.caption = element_text(size = 10, hjust = 0.5, color = "gray50"),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 11),
+    axis.text.y = element_text(size = 12),
+    legend.position = "bottom",
+    legend.title = element_text(size = 11, face = "bold"),
+    panel.grid.major.y = element_line(color = "gray90", size = 0.5),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_line(color = "gray95", size = 0.3)
+  ) +
+  # Add text annotations for impact values
+  geom_text(aes(label = paste0(Impact, "x")), 
+            hjust = -0.3, vjust = 0.5, size = 3.5, fontface = "bold") +
+  # Customize legend
+  guides(
+    color = guide_legend(override.aes = list(size = 5)),
+    size = "none"  # Remove size legend since it's redundant with color
+  )
+
+# Display the forest plot
+forest_plot
+
+# Add clinical interpretation
+cat("\n\nClinical Interpretation:\n")
+cat("========================\n")
+cat("• Weight (100kg vs 70kg): 1.25x increase in clearance\n")
+cat("  → Heavier patients need 25% higher doses\n\n")
+cat("• Age (70y vs 40y): 1.10x increase in clearance\n") 
+cat("  → Older patients need 10% higher doses\n\n")
+cat("• ADA Positive Status: 3.0x increase in apparent clearance\n")
+cat("  → ADA-positive patients need 3x higher doses due to 'spam filter' effect\n\n")
+cat("• Reference line at 1.0 = no effect on clearance\n")
+cat("• Values > 1.0 indicate increased clearance (higher dose needed)\n")
+cat("• Values < 1.0 indicate decreased clearance (lower dose needed)\n")
+```
+
+# Step 5: Final Reporting
+
+```{r}
+
+```
+
+# Goal: Write a summary of your findings based on the plots generated above.
+
+# Discussion Questions:
+
+    Did the ADA Positive patients show lower drug concentrations (PK)?
+
+    Did that lower concentration result in a smaller blood-thinning effect (PD)?
+
+    Based on the Forest Plot, which factor should a doctor care about more: the patient's Weight or their ADA Status?
+
+# Final Objective
+
+Your rendered Quarto document should show the code generated by your AI Co-pilot and the resulting visualizations. You will present the Forest Plot as your final evidence for the dosing recommendation of Warfarin.
+
+# Critical Thinking:** When the AI generates the code, check: 
+# "Did it use the right log-scale? Did it join the ADA status correctly?"* 
+# The "Pharma" Logic:**DVID** (dependent variable ID), **CP vs PCA**, and **Forest Plots**—all core concepts.

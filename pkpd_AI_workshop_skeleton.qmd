@@ -1,0 +1,153 @@
+---
+title: "Project Warfarin: AI-Assisted PK/PD Workflow"
+subtitle: "1-Day ntro: Mastering the 'Spam Filter' Logic"
+author: "Yourname & AI Co-pilot"
+date: "2026-03-02"
+format: 
+  html:
+    toc: true
+    theme: cosmo
+    self-contained: true
+---
+
+# Introduction
+Today you will act as the PKPD "Architect"...You provide the logic, and your AI Co-pilot (Claude/Co-pilot) provides the R code. We are using the **Industry Gold Standard Warfarin Dataset** to understand how Weight (The Sink) and ADAs (The Spam Filter) impact drug levels.
+
+---
+
+## Step 0: Environment Setup & Data Ingestion
+**Goal:** Load the packages and standard industry data and "inject" our custom biological variables.
+
+```{r}
+# PROMPT:
+# "1. Load the 'tidyverse', 'patchwork', and 'nlmixr2data', zoo, plotly libraries.
+
+
+
+```
+
+# standard industry data and "inject" our custom biological variables
+```{r step0_setup}
+# PROMPT:
+# "1. Load the 'tidyverse', 'patchwork', and 'nlmixr2data' libraries.
+# 2. Load the 'warfarin' dataset from the nlmixr2data package.
+# 3. Create a mapping table for the 33 unique IDs in the dataset. 
+# 4. Randomly assign each ID an 'ADA_STATUS' of 'Positive' (20% chance) or 'Negative' (80% chance).
+# 5. Join this status back to the main warfarin dataset.
+# 6. Create a 'DV' (Dependent Variable) logic: If DVID is 'cp' (concentration) 
+#    and ADA_STATUS is 'Positive', multiply the concentration by 0.4 to 
+#    simulate the immune system 'deleting' the drug." Instead of a constant multiplier, simulate ADA impact by increasing the elimination rate constant (ke​) by 3x for ADA-positive patients.
+
+
+
+
+# Did the drug drop by exactly 60% at every hour? Does the immune system work like a constant multiplier, or should it clear the drug faster over time?
+```
+
+# Step 1: Software & Environment (The 'Melt')
+
+# Goal: Organize the "CP" (Concentration) and "PCA" (Effect) data into a readable table.
+```{r}
+# PROMPT:
+# "Write R code to display the first 10 rows of our joined dataset. 
+# Select only the columns ID, TIME, DV, DVID, WT (Weight), and ADA_STATUS. 
+# Use the kable() function from the knitr package to make it look professional."
+
+
+
+# Try again with GT or gtsummary for a more polished table presentation.
+```
+
+
+# Step 2: EDA & Data Logic (The Sink and The Drain)
+
+# Goal: Use ggplot2 to visualize the "Spam Filter" impact on both the drug levels and the clinical effect.
+
+```{r}
+# PROMPT:
+# "Generate two plots using ggplot2 and combine them using the patchwork library:
+# 1. A PK Plot: Filter DVID for 'cp', plot TIME vs DV, group by ID, 
+#    color by ADA_STATUS, and use a log-y scale.
+# 2. A PD Plot: Filter DVID for 'pca' (the blood thinning effect), 
+#    plot TIME vs DV, group by ID, and color by ADA_STATUS.
+# 3. Add a title 'Impact of the Spam Filter (ADA) on Warfarin PK/PD'."
+
+
+
+
+# make 1 more PkPD plot using ggplot2 and some advanced feature, not about ADA
+# Create an advanced PK/PD plot with concentration-effect relationship
+
+
+
+# can you make that work now with plotly?
+
+
+
+# What does the direction of the arrow tell us about how long it takes Warfarin to start working?
+
+
+
+# What is the GAM smooth trend mean for PK?
+```
+
+# Step 3: Execution & Diagnostics
+
+# Goal: Validate the model's accuracy by comparing "Predictions" to "Observations."
+
+```{r}
+# PROMPT:
+# "Create a diagnostic dataframe for the 'cp' (concentration) data. 
+# 1. Create a 'PRED' column that is the DV value plus a small amount of random noise.
+# 2. Create a ggplot Scatterplot of PRED (x-axis) vs DV (y-axis).
+# 3. Add a dashed 45-degree identity line (y=x).
+# 4. Color the points by ADA_STATUS to see if our 'Spam Filter' patients 
+#    follow the same intercept as the normal patients."
+# 5. calculate Individual Weighted Residuals (IWRES). Create Weighted Residuals (WRES) plots to see if the model fails specifically at 24 hours or 100 hours. Calculate IWRES as (DV−PRED)/SD, where SD is the standard deviation of the residuals. Create a 2x2 panel using patchwork showing: 1. PRED vs DV, 2. TIME vs IWRES, 3. PRED vs IWRES, and 4. A Histogram of IWRES to check for normality.
+#6. Create a plot of TIME (x-axis) vs IWRES (y-axis).
+
+
+```
+
+# Step 4: Qualification & Advanced Math (The Forest Plot)
+
+# Goal: Create the "Final Answer" for the FDA: How much do Weight and ADAs shift the drug's clearance?
+
+```{r}
+# PROMPT:
+# 1. Visual Predictive Check (VPC): generates a "Cloud" (the 95% Confidence Interval of the model) and overlays the real Warfarin dots on top
+# 2. simulate the 5th, 50th, and 95th percentiles of the drug concentration over time. Plot these as a shaded ribbon (the cloud) and overlay the actual Warfarin concentration points as dots.
+# To create the VPC cloud, group the data by TIME. For each time point, calculate the 5th, 50th, and 95th percentiles of the concentrations. Use geom_ribbon to plot the area between the 5th and 95th percentiles as a 'Confidence Cloud' and geom_line for the 50th (median). Finally, overlay the raw DV data as points to see if they fall within the cloud.
+
+
+
+```
+
+# Step 5: Final Reporting
+
+```{r}
+# "Create a summary table for a Forest Plot with three variables: 
+# 'Weight (100kg vs 70kg)', 'Age (70y vs 40y)', and 'ADA Positive Status'.
+# 1. Assign 'Impact' values: Weight = 1.25, Age = 1.10, ADA = 3.0.
+# 2. Include 'Lower' and 'Upper' columns for 95% confidence intervals.
+# 3. Write the ggplot code for a horizontal Forest Plot using 
+#    geom_point and geom_errorbarh. Add a vertical dotted line at x=1."
+```
+
+# Goal: Write a summary of your findings based on the plots generated above.
+
+# Discussion Questions:
+
+    Did the ADA Positive patients show lower drug concentrations (PK)?
+
+    Did that lower concentration result in a smaller blood-thinning effect (PD)?
+
+    Based on the Forest Plot, which factor should a doctor care about more: the patient's Weight or their ADA Status?
+
+# Final Objective
+
+Your rendered Quarto document should show the code generated by your AI Co-pilot and the resulting visualizations. You will present the Forest Plot as your final evidence for the dosing recommendation of Warfarin.
+
+# Critical Thinking:** When the AI generates the code, check: 
+# "Did it use the right log-scale? Did it join the ADA status correctly?"* 
+# The "Pharma" Logic:**DVID** (dependent variable ID), **CP vs PCA**, and **Forest Plots**—all core concepts.
