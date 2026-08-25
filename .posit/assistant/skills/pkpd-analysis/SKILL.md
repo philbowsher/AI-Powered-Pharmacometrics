@@ -5,11 +5,15 @@ description: Provides exact data schema, required reshaping steps, package API p
 
 # PK/PD Analysis Methodology
 
+## Workshop structure
+
+This workshop is split across four Quarto documents (created by `create_workshop_docs.R`), not one: `01_data_setup.qmd`, `02_nca.qmd`, `03_modeling.qmd`, `04_simulation.qmd`. Each has its section headers already in place — write code into the existing sections rather than proposing a new outline. Data validation/QA is handled by ready-made scripts in `validation/` (run directly, not built via prompting) — don't suggest rebuilding that logic inside the four documents.
+
 ## `pk_data` schema
 
 **mAb dataset** (`dataset_choice <- "mab"`): `SUBJID`, `ARM`, `COHORT`, `DOSE`, `AGE`, `SEX`, `WEIGHT`, `TIME_DAYS`, `CONC` (NA = BLQ), `BLQ_FLAG`, `CRP` (PD endpoint). One row per subject per timepoint, `DOSE` repeated on every row — this is **not** modeling-ready, see below.
 
-**Warfarin dataset** (`dataset_choice <- "warfarin"`, `nlmixr2data::warfarin`): `id`, `time`, `dv`, `dvid` (`"cp"` = concentration, `"pca"` = anticoagulant effect — **mixed in the same long dataset**), `amt`, `wt`, `evid`, `cmt`. Already event-structured for nlmixr2.
+**Warfarin dataset** (`dataset_choice <- "warfarin"`, `nlmixr2data::warfarin`): `id`, `time`, `amt`, `dv`, `dvid` (`"cp"` = concentration, `"pca"` = anticoagulant effect — **mixed in the same long dataset**), `evid`, `wt`, `age`, `sex`. No `cmt` column — add one (1 for all rows is fine for a 1-compartment oral model) if a package requires it. Already has `amt`/`evid` dosing-event structure, unlike the mAb dataset.
 
 ## Reshaping `pk_data` for `nlmixr2` (mAb dataset only — Warfarin already has this)
 
