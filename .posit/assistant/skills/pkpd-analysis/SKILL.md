@@ -22,7 +22,7 @@ This workshop is split across four Quarto documents (created by `create_workshop
 ```r
 dosing_rows <- pk_data |>
   distinct(SUBJID, DOSE, WEIGHT) |>
-  mutate(TIME_DAYS = 0, AMT = DOSE, EVID = 1, DV = NA_real_, CMT = 1)
+  mutate(TIME_DAYS = 0, AMT = DOSE * 1000, EVID = 1, DV = NA_real_, CMT = 1)  # see gotcha below
 
 obs_rows <- pk_data |>
   mutate(AMT = 0, EVID = 0, DV = CONC, CMT = 2) |>
@@ -84,17 +84,37 @@ model_warfarin <- function() {
 
 If it doesn't converge, that's a valid result — report it and use NCA instead, which is the primary method for this drug class regardless of whether modeling succeeds.
 
+**Gotcha (tested, confirmed on the mAb dataset):** `generate_pk_datasets.R` scales dose by 1000 internally when simulating `CONC` (`F_sc * DOSE * 1000 * Ka / V / ...`). If you set `AMT = DOSE` (raw mg) instead of `AMT = DOSE * 1000` when reshaping for `nlmixr2`, the fit will still "succeed" numerically but `CL` and `V` come back ~700x too small while `Ka` stays correct — a dose/concentration unit mismatch masquerading as a fit result, not a convergence failure. If `Ka` looks right but `CL`/`V` look absurd, check dose scaling before anything else.
+
+**Also expected:** `nlmixr2` may throw `Error calculating covariance via linearization` even on a good fit — this is common with small/sparse data and doesn't invalidate the point estimates (`fixef(fit)` still works). Wrap the covariance step, not the whole fit, if you want to handle it gracefully:
+```r
+fit <- nlmixr(model_mab, nlmix_data, est = "saem", control = saemControl(print = 0))
+if (inherits(try(fit$cov, silent = TRUE), "try-error")) {
+  message("Covariance failed (common with sparse data) - point estimates below are still valid")
+}
+exp(fixef(fit))  # CL, V, Ka on the natural scale
+```
+
 ## `PKNCA` — object-based API, not plain dplyr
 
 ```r
 library(PKNCA)
-conc_obj <- PKNCAconc(obs_rows, DV ~ TIME_DAYS | SUBJID)
-dose_obj <- PKNCAdose(dosing_rows, AMT ~ TIME_DAYS | SUBJID)
-data_obj <- PKNCAdata(conc_obj, dose_obj)
+conc_data <- pk_data |> filter(!is.na(CONC))  # drop the BLQ/NA pre-dose row, see below
+dose_data <- pk_data |> distinct(SUBJID, DOSE) |> mutate(TIME_DAYS = 0)
+
+conc_obj <- PKNCAconc(conc_data, CONC ~ TIME_DAYS | SUBJID)
+dose_obj <- PKNCAdose(dose_data, DOSE ~ TIME_DAYS | SUBJID)
+
+# Explicit intervals starting at the first REAL measurement time (see gotcha below)
+my_intervals <- data.frame(start = 1, end = Inf, auclast = TRUE, cmax = TRUE,
+                            tmax = TRUE, half.life = TRUE, aucinf.obs = TRUE)
+data_obj <- PKNCAdata(conc_obj, dose_obj, intervals = my_intervals)
 results  <- pk.nca(data_obj)
 summary(results)
 ```
 `pk.nca()` returns Cmax, Tmax, AUClast, half-life, etc. per subject automatically — don't hand-write trapezoidal AUC or half-life regression.
+
+**Gotcha (tested, confirmed on the mAb dataset):** the pre-dose `TIME_DAYS=0` row has `CONC=NA` (BLQ). If you let `PKNCAdata()` auto-derive intervals, it anchors the AUC start to the dose time (0), which precedes the first real measurement (day 1) — this throws dozens of "before the first measurement" warnings and `aucinf.obs` comes back `NC` (not calculated). Fix: filter out `NA` concentration rows before building `PKNCAconc`, and pass an explicit `intervals` data frame with `start` set to the first real observation time, not 0.
 
 ## `vpc` — needs explicit column mapping, can fail silently
 
@@ -125,7 +145,7 @@ mod |> mrgsolve::ev(amt = 300, ii = 24, addl = 0) |>
   mrgsolve::idata_set(data.frame(ID = 1:100)) |>
   mrgsolve::mrgsim(end = 56, delta = 1) |> as_tibble()
 ```
-Use the fitted `nlmixr2` (or NCA-derived) parameter estimates as `$PARAM` values — not arbitrary numbers.
+Use the fitted `nlmixr2` (or NCA-derived) parameter estimates as `$PARAM` values — not arbitrary numbers. If those parameters came from fitting the mAb dataset, the same `AMT = DOSE * 1000` scaling gotcha above applies here too — simulate doses in the same scaled units the model was fit on, or Cmax/AUC will come out ~1000x wrong.
 
 ## `pointblank` — agent/interrogate pattern, not manual if-checks
 
@@ -135,6 +155,32 @@ agent <- pointblank::create_agent(pk_data) |>
   pointblank::col_vals_not_null(columns = "SUBJID") |>
   pointblank::interrogate()
 agent  # prints a pass/fail report
+```
+
+## Dose-response summaries — compare to each subject's own baseline
+
+**Gotcha (tested):** comparing a cohort's min PD value to that cohort's *own* max (e.g. `min(CRP) / max(CRP)` within a dose group) mixes between-subject baseline variability into the result and can produce a flat or nonsensical dose-response curve (identical values across doses). Compute suppression relative to each *subject's own* pre-dose baseline first, then average by cohort:
+
+```r
+pk_data |>
+  group_by(SUBJID, ARM, DOSE) |>
+  mutate(baseline = CRP[TIME_DAYS == 0]) |>
+  summarise(pct_suppression = 100 * (1 - min(CRP, na.rm = TRUE) / baseline[1]), .groups = "drop") |>
+  group_by(ARM, DOSE) |>
+  summarise(mean_pct_suppression = mean(pct_suppression), .groups = "drop")
+```
+On the mAb dataset this correctly shows suppression rising slightly with dose (~91% → ~93%) rather than a flat/backwards line — expected, since simulated concentrations are far above the PD model's IC50 at every tested dose.
+
+## Plotting `pk_data` — irregular sampling days break default axis breaks
+
+**Gotcha (tested):** `TIME_DAYS` values are irregular (0, 1, 3, 7, 14, 21, 28, 42, 56). Default `ggplot2` continuous x-axis breaks produce overlapping, unreadable tick labels. Fix with explicit breaks and rotated text:
+```r
+scale_x_continuous(breaks = unique(pk_data$TIME_DAYS)) +
+theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+When combining a PK and PD plot side by side with `patchwork`, also collect one shared legend instead of duplicating it in both panels — otherwise the legend eats most of the panel width:
+```r
+(p1 + p2) + plot_layout(guides = "collect") & theme(legend.position = "bottom")
 ```
 
 ## Package installs

@@ -40,8 +40,22 @@ for (doc in docs) {
     "    toc: true",
     "---",
     "",
-    "<!-- pk_data should already be in your R session from generate_pk_datasets.R -->",
     "<!-- Ask Posit Assistant to write the code for each section below, then run the chunk it inserts. -->",
+    "<!-- The chunk below makes this document self-contained: it loads pk_data even if you open -->",
+    "<!-- this file fresh (e.g. to render it or convert it to a Dashboard), not just interactively. -->",
+    "",
+    "```{r}",
+    "#| echo: false",
+    "if (!exists(\"pk_data\")) {",
+    "  if (file.exists(\"data/mab_pkpd.csv\")) {",
+    "    pk_data <- readr::read_csv(\"data/mab_pkpd.csv\", show_col_types = FALSE)",
+    "  } else if (file.exists(\"data/warfarin.csv\")) {",
+    "    pk_data <- readr::read_csv(\"data/warfarin.csv\", show_col_types = FALSE)",
+    "  } else {",
+    "    stop(\"No dataset found in data/ -- run generate_pk_datasets.R first.\")",
+    "  }",
+    "}",
+    "```",
     ""
   )
 
