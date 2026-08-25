@@ -1,34 +1,47 @@
 ---
 name: pkpd-analysis
-description: Provides exact data schema, package choices, and a fix for a known nlmixr2 convergence failure for this workshop's pk_data. Use whenever writing R code for PK/PD analysis, NCA, population PK modeling, dose simulation, or diagnostics in this project.
+description: Provides exact data schema, required reshaping steps, package API patterns, and a fix for a known nlmixr2 convergence failure for this workshop's pk_data. Use whenever writing R code for PK/PD analysis, NCA, population PK modeling, dose simulation, or diagnostics in this project.
 ---
 
 # PK/PD Analysis Methodology
 
-## `pk_data` schema — use exactly these column names, don't guess
+## `pk_data` schema
 
-**mAb dataset** (`generate_pk_datasets.R`, `dataset_choice <- "mab"`):
-`SUBJID`, `ARM`, `COHORT`, `DOSE`, `AGE`, `SEX`, `WEIGHT`, `TIME_DAYS`, `CONC` (NA = BLQ), `BLQ_FLAG`, `CRP` (PD endpoint).
+**mAb dataset** (`dataset_choice <- "mab"`): `SUBJID`, `ARM`, `COHORT`, `DOSE`, `AGE`, `SEX`, `WEIGHT`, `TIME_DAYS`, `CONC` (NA = BLQ), `BLQ_FLAG`, `CRP` (PD endpoint). One row per subject per timepoint, `DOSE` repeated on every row — this is **not** modeling-ready, see below.
 
-**Warfarin dataset** (`dataset_choice <- "warfarin"`, from `nlmixr2data::warfarin`):
-`id`, `time`, `dv`, `dvid` (`"cp"` = concentration, `"pca"` = PD effect), `amt`, `wt`. Lowercase, different shape than the mAb set — check which is loaded before writing code, don't assume mAb's column names apply.
+**Warfarin dataset** (`dataset_choice <- "warfarin"`, `nlmixr2data::warfarin`): `id`, `time`, `dv`, `dvid` (`"cp"` = concentration, `"pca"` = anticoagulant effect — **mixed in the same long dataset**), `amt`, `wt`, `evid`, `cmt`. Already event-structured for nlmixr2.
 
-`CONC`/`dv` is already `NA` for BLQ samples in the mAb set. Don't zero-fill it.
+## Reshaping `pk_data` for `nlmixr2` (mAb dataset only — Warfarin already has this)
 
-## Package choice — non-default packages to use, not substitute
-
-| Task | Use | Not |
-|---|---|---|
-| NCA (Cmax, Tmax, AUC, half-life) | `PKNCA` | hand-rolled trapezoidal code |
-| Population PK modeling | `nlmixr2`, SAEM | `nlme`, `nls`, or other fitting packages |
-| VPC / GOF diagnostics | `vpc` | manual percentile plots, unless `vpc` fails |
-| Dose-scenario simulation | `mrgsolve` | manual ODE solving |
-
-## Known issue: nlmixr2 fails on the mAb dataset with default starting values
-
-Generic oral-drug starting values (`CL~10`, `V~80`, `Ka~0.8`) are 10-30x too large for the mAb dataset and are the most common cause of SAEM non-convergence here — not evidence the data can't be modeled. Use mAb-scale values instead:
+`nlmixr2` needs one dosing row (`EVID=1`, `AMT`=dose, `CMT`=1/depot) and one row per observation (`EVID=0`, `DV`=concentration, `CMT`=2/central) per subject — not a `DOSE` column repeated on every row. Build it like this before fitting:
 
 ```r
+dosing_rows <- pk_data |>
+  distinct(SUBJID, DOSE, WEIGHT) |>
+  mutate(TIME_DAYS = 0, AMT = DOSE, EVID = 1, DV = NA_real_, CMT = 1)
+
+obs_rows <- pk_data |>
+  mutate(AMT = 0, EVID = 0, DV = CONC, CMT = 2) |>
+  filter(!is.na(DV))  # drop BLQ rows, don't feed NA concentrations to nlmixr2
+
+nlmix_data <- bind_rows(dosing_rows, obs_rows) |>
+  arrange(SUBJID, TIME_DAYS) |>
+  rename(ID = SUBJID, TIME = TIME_DAYS, WT = WEIGHT)
+```
+
+## Warfarin: filter to PK before modeling concentration
+
+```r
+warfarin_pk <- nlmixr2data::warfarin |> filter(dvid == "cp")
+```
+Don't fit a PK model on the unfiltered dataset — `dvid == "pca"` rows are the PD effect, not concentration, and will corrupt the fit.
+
+## `nlmixr2` starting values — use drug-class-appropriate values
+
+Generic oral starting values (`CL~10`, `V~80`, `Ka~0.8`) are scaled for small molecules, not biologics. If a mAb model fails to converge, mismatched starting values are the first thing to check — but SAEM often converges fine even from imperfect starting points, so don't assume failure. Use mAb-scale values as the default for that dataset regardless:
+
+```r
+# mAb (use nlmix_data built above)
 model_mab <- function() {
   ini({
     tCL <- log(0.3); tV <- log(5); tKa <- log(0.35)
@@ -46,8 +59,43 @@ model_mab <- function() {
 }
 ```
 
-If it still won't converge after this, that's a valid result — report it and use NCA instead, which is the primary method for this drug class regardless.
+```r
+# Warfarin (use warfarin_pk, already event-structured)
+model_warfarin <- function() {
+  ini({
+    tCL <- log(10); tV <- log(80); tKa <- log(0.8)
+    eta.CL ~ 0.1; eta.V ~ 0.1; eta.Ka ~ 0.1
+    prop.err <- 0.2
+  })
+  model({
+    CL <- exp(tCL + eta.CL); V <- exp(tV + eta.V); Ka <- exp(tKa + eta.Ka)
+    ke <- CL / V
+    d/dt(depot)   <- -Ka * depot
+    d/dt(central) <- Ka * depot - ke * central
+    cp <- central / V
+    cp ~ prop(prop.err)
+  })
+}
+```
+
+If it doesn't converge, that's a valid result — report it and use NCA instead, which is the primary method for this drug class regardless of whether modeling succeeds.
+
+## `PKNCA` — object-based API, not plain dplyr
+
+```r
+library(PKNCA)
+conc_obj <- PKNCAconc(obs_rows, DV ~ TIME_DAYS | SUBJID)
+dose_obj <- PKNCAdose(dosing_rows, AMT ~ TIME_DAYS | SUBJID)
+data_obj <- PKNCAdata(conc_obj, dose_obj)
+results  <- pk.nca(data_obj)
+summary(results)
+```
+`pk.nca()` returns Cmax, Tmax, AUClast, half-life, etc. per subject automatically — don't hand-write trapezoidal AUC or half-life regression.
 
 ## Package installs
 
-This project's default repo is already configured for this workshop's environment (`dev.workshop.posit.team`). Never pass `repos=` to `install.packages()` or override `options(repos=...)` — that would bypass it.
+This workshop's environment (`dev.workshop.posit.team`) is already configured to use:
+- CRAN: `https://packagemanager.posit.co/cran/__linux__/jammy/latest`
+- Bioconductor: `https://p3m.dev/bioconductor`
+
+Never pass `repos=` to `install.packages()` or call `options(repos=...)` — that overrides these and can pull from a public CRAN mirror instead.
