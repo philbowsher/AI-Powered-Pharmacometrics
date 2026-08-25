@@ -92,6 +92,47 @@ summary(results)
 ```
 `pk.nca()` returns Cmax, Tmax, AUClast, half-life, etc. per subject automatically — don't hand-write trapezoidal AUC or half-life regression.
 
+## `vpc` — needs explicit column mapping, can fail silently
+
+```r
+vpc_result <- tryCatch(
+  vpc::vpc(sim = fitted_model, obs = nlmix_data,
+           obs_cols = list(dv = "DV", idv = "TIME", id = "ID"),
+           sim_cols = list(dv = "DV", idv = "TIME", id = "ID"),
+           pi = c(0.05, 0.95)),
+  error = function(e) NULL
+)
+```
+If `vpc_result` is `NULL`, fall back to a manual percentile-band plot: simulate several replicates with `rxode2::rxSolve()`, compute 5th/50th/95th percentiles per time bin with dplyr, plot with `geom_ribbon()`.
+
+## `mrgsolve` — model code is a text block (a DSL), not an R function
+
+```r
+mod <- mrgsolve::mcode("pk_model", '
+$PARAM CL = 0.3, V = 5, KA = 0.35
+$CMT DEPOT CENTRAL
+$ODE
+dxdt_DEPOT = -KA * DEPOT;
+dxdt_CENTRAL = KA * DEPOT - (CL/V) * CENTRAL;
+$TABLE
+capture CP = CENTRAL / V;
+')
+mod |> mrgsolve::ev(amt = 300, ii = 24, addl = 0) |>
+  mrgsolve::idata_set(data.frame(ID = 1:100)) |>
+  mrgsolve::mrgsim(end = 56, delta = 1) |> as_tibble()
+```
+Use the fitted `nlmixr2` (or NCA-derived) parameter estimates as `$PARAM` values — not arbitrary numbers.
+
+## `pointblank` — agent/interrogate pattern, not manual if-checks
+
+```r
+agent <- pointblank::create_agent(pk_data) |>
+  pointblank::col_vals_gte(columns = "CONC", value = 0, na_pass = TRUE) |>
+  pointblank::col_vals_not_null(columns = "SUBJID") |>
+  pointblank::interrogate()
+agent  # prints a pass/fail report
+```
+
 ## Package installs
 
 This workshop's environment (`dev.workshop.posit.team`) is already configured to use:
