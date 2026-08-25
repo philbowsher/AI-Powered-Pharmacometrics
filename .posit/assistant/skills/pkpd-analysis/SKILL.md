@@ -15,37 +15,25 @@ This workshop is split across four Quarto documents (created by `create_workshop
 
 **Warfarin dataset** (`dataset_choice <- "warfarin"`, `nlmixr2data::warfarin`): `id`, `time`, `amt`, `dv`, `dvid` (`"cp"` = concentration, `"pca"` = anticoagulant effect — **mixed in the same long dataset**), `evid`, `wt`, `age`, `sex`. No `cmt` column — add one (1 for all rows is fine for a 1-compartment oral model) if a package requires it. Already has `amt`/`evid` dosing-event structure, unlike the mAb dataset.
 
-## Reshaping `pk_data` for `nlmixr2` (mAb dataset only — Warfarin already has this)
+## Document 3 (Population PK Modeling & Diagnostics): use the provided helpers, don't regenerate reshaping
 
-`nlmixr2` needs one dosing row (`EVID=1`, `AMT`=dose, `CMT`=1/depot) and one row per observation (`EVID=0`, `DV`=concentration, `CMT`=2/central) per subject — not a `DOSE` column repeated on every row. Build it like this before fitting:
-
-```r
-dosing_rows <- pk_data |>
-  distinct(SUBJID, DOSE, WEIGHT) |>
-  mutate(TIME_DAYS = 0, AMT = DOSE * 1000, EVID = 1, DV = NA_real_, CMT = 1)  # see gotcha below
-
-obs_rows <- pk_data |>
-  mutate(AMT = 0, EVID = 0, DV = CONC, CMT = 2) |>
-  filter(!is.na(DV))  # drop BLQ rows, don't feed NA concentrations to nlmixr2
-
-nlmix_data <- bind_rows(dosing_rows, obs_rows) |>
-  arrange(SUBJID, TIME_DAYS) |>
-  rename(ID = SUBJID, TIME = TIME_DAYS, WT = WEIGHT)
-```
-
-## Warfarin: filter to PK before modeling concentration
+`source("modeling_helpers.R")` provides three tested functions — **use them instead of writing the reshaping logic from scratch**, since that's exactly where a silent dose-unit bug was found during testing:
 
 ```r
-warfarin_pk <- nlmixr2data::warfarin |> filter(dvid == "cp")
+source("modeling_helpers.R")
+nlmix_data <- reshape_for_nlmixr(pk_data)                       # handles mAb reshape + dose scaling, or Warfarin PK filter
+fit <- fit_pk_model(nlmix_data, drug_class = "mab")             # or "warfarin" -- uses correct starting values
+check_fit(fit)                                                  # prints estimates + sanity checks
 ```
-Don't fit a PK model on the unfiltered dataset — `dvid == "pca"` rows are the PD effect, not concentration, and will corrupt the fit.
+
+`reshape_for_nlmixr()` builds one dosing row (`EVID=1`, `AMT`=dose, `CMT`=1/depot) and one row per observation (`EVID=0`, `DV`=concentration, `CMT`=2/central) per subject for the mAb dataset (auto-scaling `AMT` by 1000 to match how `CONC` was simulated), or filters to `dvid == "cp"` for Warfarin (dropping the `"pca"` PD rows, which would otherwise corrupt a PK fit). `fit_pk_model()` uses the correct drug-class-scaled starting values (see below) automatically. Still write your own `ini()`/`model()` block with Assistant if you want to see how nlmixr2 model syntax works — the helpers exist to remove the risky plumbing, not the learning.
 
 ## `nlmixr2` starting values — use drug-class-appropriate values
 
 Generic oral starting values (`CL~10`, `V~80`, `Ka~0.8`) are scaled for small molecules, not biologics. If a mAb model fails to converge, mismatched starting values are the first thing to check — but SAEM often converges fine even from imperfect starting points, so don't assume failure. Use mAb-scale values as the default for that dataset regardless:
 
 ```r
-# mAb (use nlmix_data built above)
+# mAb (use nlmix_data from reshape_for_nlmixr() above, or write your own model to compare)
 model_mab <- function() {
   ini({
     tCL <- log(0.3); tV <- log(5); tKa <- log(0.35)
