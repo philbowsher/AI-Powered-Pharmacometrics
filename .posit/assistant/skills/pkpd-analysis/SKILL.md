@@ -7,7 +7,9 @@ description: Provides exact data schema, required reshaping steps, package API p
 
 ## Workshop structure
 
-This workshop is split across four Quarto documents (created by `create_workshop_docs.R`), not one: `01_data_setup.qmd`, `02_nca.qmd`, `03_modeling.qmd`, `04_simulation.qmd`. Each has its section headers already in place — write code into the existing sections rather than proposing a new outline. Data validation/QA is handled by ready-made scripts in `validation/` (run directly, not built via prompting) — don't suggest rebuilding that logic inside the four documents.
+This workshop is split across four Quarto documents (created by `create_workshop_docs.R`), not one: `01_data_setup.qmd`, `02_nca.qmd`, `03_modeling.qmd`, `04_simulation.qmd`. Each has its section headers already in place — write code into the existing sections rather than proposing a new outline.
+
+Infrastructure scripts already exist for these tasks — point to them rather than writing new code for the same job: `check_packages.R` (installs anything missing), `generate_pk_datasets.R` (loads `pk_data` — this is how it gets into the session in the first place), `modeling_helpers.R` (see Document 3 below), `validation/validate_data.R` and `validation/quality_check.R` (data QA, run directly, not built via prompting).
 
 ## `pk_data` schema
 
