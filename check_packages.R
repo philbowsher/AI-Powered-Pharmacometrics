@@ -29,6 +29,29 @@ required_packages <- c(
   "bslib", "shiny", "shinydashboard", "plotly", "DT"  # dashboard/Shiny step
 )
 
+# Known gotcha (hit during a live workshop run): CRAN's current Deriv
+# (>= 4.3.0, a dependency of nlmixr2) ships C++ code calling R-internals
+# symbols (R_ClosureFormals, Rf_allocLang) not declared in this R 4.4.0
+# installation's headers, so it fails to compile from source -- and no
+# prebuilt binary exists for this version on this R/platform combination
+# via the package manager (confirmed: available.packages(type="binary")
+# still resolves to src/contrib even with a correct platform user-agent,
+# so this is not a binary-flag/HTTPUserAgent issue -- that was checked and
+# ruled out). Fix: install the last pure-R release (4.1.2, predates the
+# C++ rewrite) from the CRAN archive before nlmixr2 pulls in the broken one.
+if (!requireNamespace("Deriv", quietly = TRUE)) {
+  tryCatch({
+    install.packages(
+      "https://cran.r-project.org/src/contrib/Archive/Deriv/Deriv_4.1.2.tar.gz",
+      repos = NULL, type = "source"
+    )
+    cat("[fixed]   Pre-installed Deriv 4.1.2 (avoids a known nlmixr2 install failure)\n\n")
+  }, error = function(e) {
+    message("Could not pre-install Deriv 4.1.2 -- if nlmixr2 fails to install with ",
+            "R_ClosureFormals/Rf_allocLang compile errors, see the note above this line.")
+  })
+}
+
 cat("Checking", length(required_packages), "packages...\n\n")
 
 missing <- character(0)

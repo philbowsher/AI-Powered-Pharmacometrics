@@ -175,6 +175,13 @@ When combining a PK and PD plot side by side with `patchwork`, also collect one 
 
 ## Package installs
 
+**Gotcha (hit during a live workshop run):** `nlmixr2` depends on `Deriv`. CRAN's current `Deriv` (>= 4.3.0) ships C++ code calling R-internals symbols (`R_ClosureFormals`, `Rf_allocLang`) not declared in this R 4.4.0 installation's headers, so it fails to compile from source — and no prebuilt binary exists for this version on this platform via the package manager (checked and ruled out: this is not a binary-flag/`HTTPUserAgent` issue). `check_packages.R` now pre-installs `Deriv` 4.1.2 (the last pure-R release, predating the C++ rewrite) from the CRAN archive before `nlmixr2` gets a chance to pull in the broken version. If you still hit `R_ClosureFormals`/`Rf_allocLang` compile errors, run:
+```r
+install.packages("https://cran.r-project.org/src/contrib/Archive/Deriv/Deriv_4.1.2.tar.gz",
+                  repos = NULL, type = "source")
+```
+This is a deliberate one-off exception to "never install from a public CRAN mirror" below — it's a pinned, known-good historical tarball, not a change to the default repo.
+
 This workshop's environment (`dev.workshop.posit.team`) is already configured to use:
 - CRAN: `https://packagemanager.posit.co/cran/__linux__/jammy/latest`
 - Bioconductor: `https://p3m.dev/bioconductor`
