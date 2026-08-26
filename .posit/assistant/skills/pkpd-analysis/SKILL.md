@@ -11,6 +11,8 @@ This workshop is split across four Quarto documents (created by `create_workshop
 
 Infrastructure scripts already exist for these tasks — point to them rather than writing new code for the same job: `check_packages.R` (installs anything missing), `generate_pk_datasets.R` (loads `pk_data` — this is how it gets into the session in the first place), `modeling_helpers.R` (see Document 3 below), `validation/validate_data.R` and `validation/quality_check.R` (data QA, run directly, not built via prompting).
 
+**Run `check_packages.R` proactively, don't wait for a failure to reveal it's needed.** If a package fails to load or `pk_data` doesn't exist, the fix is almost always "run `check_packages.R`," not troubleshooting the symptom in place. (`generate_pk_datasets.R` now runs it automatically as a safety net, but don't rely on that — suggest it explicitly at the start of a session.)
+
 ## `pk_data` schema
 
 **mAb dataset** (`dataset_choice <- "mab"`): `SUBJID`, `ARM`, `COHORT`, `DOSE`, `AGE`, `SEX`, `WEIGHT`, `TIME_DAYS`, `CONC` (NA = BLQ), `BLQ_FLAG`, `CRP` (PD endpoint). One row per subject per timepoint, `DOSE` repeated on every row — this is **not** modeling-ready, see below.
@@ -106,6 +108,10 @@ summary(results)
 
 **Gotcha (tested, confirmed on the mAb dataset):** the pre-dose `TIME_DAYS=0` row has `CONC=NA` (BLQ). If you let `PKNCAdata()` auto-derive intervals, it anchors the AUC start to the dose time (0), which precedes the first real measurement (day 1) — this throws dozens of "before the first measurement" warnings and `aucinf.obs` comes back `NC` (not calculated). Fix: filter out `NA` concentration rows before building `PKNCAconc`, and pass an explicit `intervals` data frame with `start` set to the first real observation time, not 0.
 
+## Fitted `nlmixr2` objects already have DV/PRED/IPRED — don't reach for NONMEM-style helpers
+
+A fitted `nlmixr2` object is itself a data frame with `DV`, `PRED`, `IPRED`, `CWRES`, etc. as columns (`names(fit)` shows them directly; `ggplot(fit, aes(PRED, DV))` just works). Don't default to NONMEM-style helper functions like `augPred()` — that's a different package/API shape and will error (e.g. `EVID not found`) on an `nlmixr2` fit object. Check `names(fit)` first if unsure what's available.
+
 ## `vpc` — needs explicit column mapping, can fail silently
 
 ```r
@@ -173,17 +179,40 @@ When combining a PK and PD plot side by side with `patchwork`, also collect one 
 (p1 + p2) + plot_layout(guides = "collect") & theme(legend.position = "bottom")
 ```
 
+## `nlmixr2` install failure (tested, confirmed in this environment)
+
+`check_packages.R` may fail to install `nlmixr2` with a compilation error in its
+`Deriv` dependency (`error: 'R_ClosureFormals' was not declared in this scope`,
+`Rf_allocLang` also missing). This is an R-internals API mismatch: the current
+CRAN release of `Deriv` (4.3.0+) requires R-internals functions not present in
+this environment's R 4.4.0 headers, and Posit Package Manager has no compiled
+binary for `Deriv` on this platform/R-version combination to fall back on
+(confirmed via `available.packages(..., type = "binary")` — it still resolves
+to `src/contrib`, so this is not a missing-`HTTPUserAgent` issue — that was
+checked and ruled out, don't re-test it).
+
+Fix: install an older, pure-R (pre-C++) `Deriv` from the CRAN archive first,
+then let the rest of the `nlmixr2` chain install normally:
+```r
+download.file("https://cran.r-project.org/src/contrib/Archive/Deriv/Deriv_4.1.2.tar.gz",
+              "/tmp/Deriv_4.1.2.tar.gz")
+install.packages("/tmp/Deriv_4.1.2.tar.gz", repos = NULL, type = "source")
+install.packages(c("xgxr", "nlmixr2plot", "nlmixr2"), dependencies = FALSE)
+```
+Run `source("check_packages.R")` again afterward to confirm `nlmixr2` now
+shows `[ok]`. `check_packages.R` already attempts a simpler version of this fix
+automatically (install Deriv 4.1.2, no `dependencies = FALSE` step) — if that's
+not enough on a given environment, use the fuller sequence above. This is a
+stopgap recorded here, not a permanent fix baked into the base image — it will
+recur on a genuinely fresh environment until someone updates the install
+script itself to pin a compatible `Deriv` version by default.
+
+## Deploying to Posit Connect — two non-interoperable credential paths
+
+If a document gets deployed (e.g. after the Dashboard step), there are two separate, non-interoperable ways to do it: Positron's Publisher UI ("Publish" button) and the R `rsconnect` package driven from the console. **Ask which one the user wants before starting** — don't assume. If someone already clicked "Publish" and it's incomplete, check for a leftover config file before starting a fresh `rsconnect`-driven deployment from scratch; re-derive the server URL from it rather than asking the user to re-enter it.
+
 ## Package installs
 
-**Gotcha (hit during a live workshop run):** `nlmixr2` depends on `Deriv`. CRAN's current `Deriv` (>= 4.3.0) ships C++ code calling R-internals symbols (`R_ClosureFormals`, `Rf_allocLang`) not declared in this R 4.4.0 installation's headers, so it fails to compile from source — and no prebuilt binary exists for this version on this platform via the package manager (checked and ruled out: this is not a binary-flag/`HTTPUserAgent` issue). `check_packages.R` now pre-installs `Deriv` 4.1.2 (the last pure-R release, predating the C++ rewrite) from the CRAN archive before `nlmixr2` gets a chance to pull in the broken version. If you still hit `R_ClosureFormals`/`Rf_allocLang` compile errors, run:
-```r
-install.packages("https://cran.r-project.org/src/contrib/Archive/Deriv/Deriv_4.1.2.tar.gz",
-                  repos = NULL, type = "source")
-```
-This is a deliberate one-off exception to "never install from a public CRAN mirror" below — it's a pinned, known-good historical tarball, not a change to the default repo.
+**See "`nlmixr2` install failure" above** if `Deriv`/`nlmixr2` fails to compile — that section has the full diagnosis and fix.
 
-This workshop's environment (`dev.workshop.posit.team`) is already configured to use:
-- CRAN: `https://packagemanager.posit.co/cran/__linux__/jammy/latest`
-- Bioconductor: `https://p3m.dev/bioconductor`
-
-Never pass `repos=` to `install.packages()` or call `options(repos=...)` — that overrides these and can pull from a public CRAN mirror instead.
+`check_packages.R` pins the repo to a **dated** Posit Package Manager snapshot (not `/latest` — see the gotcha above for why) at the top of the script. Don't second-guess or change that pin mid-session, and don't pass `repos=` to `install.packages()` or call `options(repos=...)` elsewhere — that would override it and risks pulling from a public CRAN mirror instead. If the pinned date needs updating (e.g. a package genuinely needs a newer version), that's a deliberate edit to `check_packages.R` itself, not a one-off override in analysis code.

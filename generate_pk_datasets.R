@@ -4,6 +4,10 @@
 
 dataset_choice <- "mab"  # "mab" or "warfarin"
 
+# Safety net: if check_packages.R was skipped, catch it here rather than
+# failing deeper into a later document under more time pressure.
+if (file.exists("check_packages.R")) source("check_packages.R")
+
 library(tidyverse)
 
 if (dataset_choice == "mab") {
